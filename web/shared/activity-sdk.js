@@ -101,7 +101,7 @@ export function createActivityClient({
     let response;
     try {
       response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
-        method: 'POST', headers, body: JSON.stringify(body),
+        method: 'POST', headers, body: JSON.stringify(body), keepalive: operation === 'referral',
       });
     } catch (_) {
       diagnostic(operation, 'network');
