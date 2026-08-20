@@ -1,7 +1,7 @@
 // Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const ACTIVITY_ID_PATTERN = /^act_[0-9a-f-]{36}$/;
+const SESSION_ID_PATTERN = /^[0-9a-f-]{36}$/;
 
 export class ActivitySdkError extends Error {
   constructor(message, { operation, category, status } = {}) {
@@ -50,7 +50,7 @@ function validateArtifact(artifact) {
 
 function validateSession(value) {
   const expiresAt = Date.parse(value?.expires_at || '');
-  if (!ACTIVITY_ID_PATTERN.test(value?.activity_id || '') ||
+  if (!SESSION_ID_PATTERN.test(value?.session_id || '') ||
       typeof value?.session_token !== 'string' || value.session_token.length < 16 ||
       !Number.isFinite(expiresAt)) {
     throw new ActivitySdkError('Activity session response is invalid', {
@@ -58,7 +58,7 @@ function validateSession(value) {
     });
   }
   return {
-    activity_id: value.activity_id,
+    session_id: value.session_id,
     session_token: value.session_token,
     expires_at: value.expires_at,
   };
@@ -159,7 +159,7 @@ export function createActivityClient({
 
   async function authenticatedWrite(operation, suffix, body, idempotencyKey) {
     const session = await ensureSession();
-    return requestJson(operation, `/v1/activities/${encodeURIComponent(session.activity_id)}/${suffix}`, {
+    return requestJson(operation, `/v1/activity-sessions/${encodeURIComponent(session.session_id)}/${suffix}`, {
       body,
       session,
       idempotencyKey: requireIdempotencyKey(idempotencyKey),

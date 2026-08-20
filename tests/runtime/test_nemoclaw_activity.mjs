@@ -35,7 +35,7 @@ function createFixture() {
       calls.push({ url, init });
       if (url.endsWith('/v1/activity-sessions')) {
         return jsonResponse(201, {
-          activity_id: 'act_0198f100-0000-7000-8000-000000000001',
+          session_id: '0198f100-0000-7000-8000-000000000001',
           session_token: 'opaque-session-token-with-safe-length',
           expires_at: '2026-08-19T21:00:00Z',
         });
@@ -107,7 +107,7 @@ test('session state is reused from the injected browser storage', async () => {
   const fetchImpl = async url => {
     if (url.endsWith('/v1/activity-sessions')) sessionRequests += 1;
     return jsonResponse(201, {
-      activity_id: 'act_0198f100-0000-7000-8000-000000000001',
+      session_id: '0198f100-0000-7000-8000-000000000001',
       session_token: 'opaque-session-token-with-safe-length',
       expires_at: '2026-08-19T21:00:00Z',
     });

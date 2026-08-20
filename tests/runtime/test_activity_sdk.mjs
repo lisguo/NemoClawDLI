@@ -25,7 +25,7 @@ function jsonResponse(status, body) {
 
 function sessionResponse(overrides = {}) {
   return {
-    activity_id: 'act_0198f100-0000-7000-8000-000000000001',
+    session_id: '0198f100-0000-7000-8000-000000000001',
     session_token: 'opaque-session-token-with-safe-length',
     expires_at: '2026-08-19T21:00:00Z',
     ...overrides,
@@ -73,7 +73,7 @@ test('an unexpired stored session is reused without a request', async () => {
 test('an expired stored session is replaced', async () => {
   const storage = createMemoryActivityStorage(sessionResponse({ expires_at: '2026-08-19T19:00:00Z' }));
   let requests = 0;
-  const replacement = sessionResponse({ activity_id: 'act_0198f100-0000-7000-8000-000000000002' });
+  const replacement = sessionResponse({ session_id: '0198f100-0000-7000-8000-000000000002' });
   const client = createActivityClient({
     baseUrl: 'https://activity.example.test',
     artifact,
@@ -113,6 +113,7 @@ test('referral and progress writes use bearer and idempotency headers', async ()
   await client.recordProgress({ progressPercent: 10, idempotencyKey: 'progress-key' });
 
   assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /\/v1\/activity-sessions\/0198f100-0000-7000-8000-000000000001\/referrals$/);
   assert.match(calls[0].url, /\/referrals$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     reference_id: 'build:nvidia-api-key',
