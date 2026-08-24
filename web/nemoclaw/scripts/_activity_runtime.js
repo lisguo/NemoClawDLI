@@ -62,7 +62,7 @@ export function installNemoClawActivityTracking({
   windowTarget.__nemoclawActivity = activity;
   const evidence = evidenceStorage(storageTarget);
   const page = pageName();
-  activity.start();
+  void activity.start();
 
   const record = milestone => {
     evidence.add(`milestone:${milestone}`);
@@ -79,7 +79,7 @@ export function installNemoClawActivityTracking({
     const anchor = event.target?.closest?.('a[href]');
     if (!anchor) return;
     const destination = anchor.href;
-    if (ACTIVITY_REFERRALS[destination]) activity.trackReferral(destination);
+    if (ACTIVITY_REFERRALS[destination]) void activity.trackReferral(destination);
   }, true);
 
   windowTarget.addEventListener('nemoclaw:run-succeeded', event => {

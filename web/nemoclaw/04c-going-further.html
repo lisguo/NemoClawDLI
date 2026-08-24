@@ -580,17 +580,17 @@ const courseActivity = getInstalledNemoClawActivity();
 async function refreshCompletion() {
   try {
     const state = await courseActivity.getCourseActivityState();
-    if (state.completed_at) {
+    if (state.completedAt) {
       finishButton.textContent = "Course completed";
       finishButton.disabled = true;
       finishStatus.textContent = "Course completed. You can return to the course home or continue exploring the resources above.";
       return;
     }
-    const ready = Number(state.progress_percent) >= 100;
+    const ready = Number(state.progressPercent) >= 100;
     finishButton.disabled = !ready;
     finishStatus.textContent = ready
       ? "All verified checkpoints are complete. Finish the course when you are ready."
-      : `Verified progress is ${Number(state.progress_percent) || 0}%. Complete the remaining hands-on checkpoints before finishing.`;
+      : `Verified progress is ${Number(state.progressPercent) || 0}%. Complete the remaining hands-on checkpoints before finishing.`;
   } catch (_) {
     finishStatus.textContent = "Course progress is temporarily unavailable. Reload this page to try again.";
   }

@@ -10,53 +10,46 @@ import {
   ACTIVITY_REFERRALS,
   BUILD_SIGNUP_URL,
   createNemoClawActivity,
+  resolveActivityBaseUrl,
 } from '../../web/nemoclaw/scripts/_activity.js';
-
-function jsonResponse(status, body) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-function fakeSessionStorage() {
-  const values = new Map();
-  return {
-    getItem: key => values.get(key) ?? null,
-    setItem: (key, value) => values.set(key, value),
-    removeItem: key => values.delete(key),
-  };
-}
 
 function createFixture({ progressPercent = 10 } = {}) {
   const calls = [];
+  const facade = {
+    progress: async (...args) => { calls.push(['progress', ...args]); },
+    referral: async (...args) => { calls.push(['referral', ...args]); },
+    getState: async () => {
+      calls.push(['getState']);
+      return { progressPercent, completedAt: null };
+    },
+    complete: async (...args) => {
+      calls.push(['complete', ...args]);
+      return progressPercent === 100 ? { written: true } : { written: false };
+    },
+  };
   const activity = createNemoClawActivity({
-    storageTarget: fakeSessionStorage(),
-    now: () => new Date('2026-08-19T20:00:00Z'),
-    fetchImpl: async (url, init) => {
-      calls.push({ url, init });
-      if (url.endsWith('/v1/activity-sessions')) {
-        return jsonResponse(201, {
-          session_id: '0198f100-0000-7000-8000-000000000001',
-          session_token: 'opaque-session-token-with-safe-length',
-          expires_at: '2026-08-19T21:00:00Z',
-        });
-      }
-      if (url.endsWith('/referrals')) {
-        return jsonResponse(201, { referral_id: 'referral-1', received_at: '2026-08-19T20:00:01Z' });
-      }
-      if (url.endsWith('/state')) {
-        return jsonResponse(200, { progress_percent: progressPercent, completed_at: null });
-      }
-      return jsonResponse(201, {
-        update_id: 'update-1',
-        received_at: '2026-08-19T20:00:02Z',
-        state: { progress_percent: 10 },
-      });
+    initialize: async options => {
+      calls.push(['initialize', options]);
+      return facade;
     },
   });
   return { activity, calls };
 }
+
+test('NemoClaw imports only the public activity facade and contains no non-production hostnames', () => {
+  const source = fs.readFileSync('web/nemoclaw/scripts/_activity.js', 'utf8');
+  const publicSource = fs.readFileSync('web/nemoclaw/scripts/_activity_runtime.js', 'utf8')
+    + fs.readFileSync('web/nemoclaw/04c-going-further.html', 'utf8') + source;
+
+  assert.match(source, /import \{ DLIActivity \}/);
+  assert.doesNotMatch(source, /createActivityClient/);
+  assert.doesNotMatch(publicSource, /activity-api\.(?:dev|stage)\.learn\.nvidia\.com/);
+});
+
+test('the base URL resolver accepts explicit local injection and otherwise uses production', () => {
+  assert.equal(resolveActivityBaseUrl({ __DLI_ACTIVITY_BASE_URL__: 'http://localhost:8787' }), 'http://localhost:8787');
+  assert.equal(resolveActivityBaseUrl({}), 'https://activity-api.learn.nvidia.com');
+});
 
 test('the milestone registry defines the approved cumulative progress model', () => {
   assert.deepEqual(
@@ -93,17 +86,21 @@ test('the referral registry includes product adoption and learning-path destinat
   );
 });
 
-test('start creates the NemoClaw proof-of-concept activity session', async () => {
+test('start initializes the NemoClaw proof-of-concept activity once', async () => {
   const { activity, calls } = createFixture();
 
   await activity.start();
+  await activity.start();
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(JSON.parse(calls[0].init.body), {
+  assert.equal(calls[0][0], 'initialize');
+  assert.equal(calls[0][1].baseUrl, 'https://activity-api.learn.nvidia.com');
+  assert.deepEqual(calls[0][1].activity, {
     artifact_id: 'artifact_nemoclaw_web',
     artifact_version: 'dev-local',
     artifact_digest: `sha256:${'0'.repeat(64)}`,
   });
+  assert.equal(typeof calls[0][1].storage.load, 'function');
 });
 
 test('the approved NVIDIA Build destination records one referral', async () => {
@@ -111,20 +108,18 @@ test('the approved NVIDIA Build destination records one referral', async () => {
 
   await activity.trackBuildReferral(BUILD_SIGNUP_URL);
 
-  const referral = calls.find(call => call.url.endsWith('/referrals'));
-  assert.ok(referral);
-  assert.deepEqual(JSON.parse(referral.init.body), {
-    reference_id: 'build:nvidia-api-key',
-    destination_url: BUILD_SIGNUP_URL,
-  });
-  assert.equal(referral.init.headers['Idempotency-Key'], 'nemoclaw:referral:build:nvidia-api-key');
+  assert.deepEqual(calls.at(-1), ['referral', {
+    referenceId: 'build:nvidia-api-key',
+    destinationUrl: BUILD_SIGNUP_URL,
+    idempotencyKey: 'nemoclaw:referral:build:nvidia-api-key',
+  }]);
 });
 
 test('an unapproved destination is not recorded as a referral', async () => {
   const { activity, calls } = createFixture();
 
   assert.equal(await activity.trackBuildReferral('https://attacker.example'), false);
-  assert.equal(calls.length, 0);
+  assert.equal(calls.filter(call => call[0] === 'referral').length, 0);
 });
 
 test('a named milestone sends its cumulative progress with a stable idempotency key', async () => {
@@ -132,18 +127,16 @@ test('a named milestone sends its cumulative progress with a stable idempotency 
 
   assert.equal(await activity.recordMilestone('02b:grounded-answer-complete'), true);
 
-  const update = calls.find(call => call.url.endsWith('/updates'));
-  assert.deepEqual(JSON.parse(update.init.body), {
-    type: 'progress', payload: { progress_percent: 45 },
-  });
-  assert.equal(update.init.headers['Idempotency-Key'], 'nemoclaw:milestone:02b:grounded-answer-complete');
+  assert.deepEqual(calls.at(-1), ['progress', 45, {
+    idempotencyKey: 'nemoclaw:milestone:02b:grounded-answer-complete',
+  }]);
 });
 
 test('course completion is blocked below 100 percent', async () => {
   const { activity, calls } = createFixture({ progressPercent: 90 });
 
   assert.equal(await activity.recordCompletion(), false);
-  assert.equal(calls.filter(call => call.url.endsWith('/updates')).length, 0);
+  assert.deepEqual(calls.at(-1), ['complete', { idempotencyKey: 'nemoclaw:course:completed' }]);
 });
 
 test('course completion is sent once state reaches 100 percent', async () => {
@@ -151,28 +144,30 @@ test('course completion is sent once state reaches 100 percent', async () => {
 
   assert.equal(await activity.recordCompletion(), true);
 
-  const update = calls.find(call => call.url.endsWith('/updates'));
-  assert.deepEqual(JSON.parse(update.init.body), { type: 'completed', payload: {} });
-  assert.equal(update.init.headers['Idempotency-Key'], 'nemoclaw:course:completed');
+  assert.deepEqual(calls.at(-1), ['complete', { idempotencyKey: 'nemoclaw:course:completed' }]);
 });
 
-test('session state is reused from the injected browser storage', async () => {
-  const storageTarget = fakeSessionStorage();
-  let sessionRequests = 0;
-  const fetchImpl = async url => {
-    if (url.endsWith('/v1/activity-sessions')) sessionRequests += 1;
-    return jsonResponse(201, {
-      session_id: '0198f100-0000-7000-8000-000000000001',
-      session_token: 'opaque-session-token-with-safe-length',
-      expires_at: '2026-08-19T21:00:00Z',
-    });
-  };
-  const options = { storageTarget, fetchImpl, now: () => new Date('2026-08-19T20:00:00Z') };
+test('course state is read through the facade', async () => {
+  const { activity, calls } = createFixture({ progressPercent: 70 });
 
-  await createNemoClawActivity(options).start();
-  await createNemoClawActivity(options).start();
+  assert.deepEqual(await activity.getCourseActivityState(), { progressPercent: 70, completedAt: null });
+  assert.deepEqual(calls.at(-1), ['getState']);
+});
 
-  assert.equal(sessionRequests, 1);
+test('facade failures remain contained and retryable at the lesson boundary', async () => {
+  let attempts = 0;
+  const activity = createNemoClawActivity({
+    initialize: async () => ({
+      complete: async () => {
+        attempts += 1;
+        throw new Error('temporarily unavailable');
+      },
+    }),
+  });
+
+  assert.equal(await activity.recordCompletion(), false);
+  assert.equal(await activity.recordCompletion(), false);
+  assert.equal(attempts, 2);
 });
 
 test('Module 1a explicitly wires session, referral, and verified progress events', () => {

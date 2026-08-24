@@ -1,10 +1,10 @@
 // Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createActivityClient } from '../../shared/activity-sdk.js';
+import { DLIActivity } from '../../shared/activity-sdk.js';
 
 export const BUILD_SIGNUP_URL = 'https://build.nvidia.com/?ncid=ref-dli-146986';
-export const ACTIVITY_API_BASE_URL = 'https://activity-api.dev.learn.nvidia.com';
+const PRODUCTION_ACTIVITY_BASE_URL = 'https://activity-api.learn.nvidia.com';
 
 const STORAGE_KEY = 'dli_activity:nemoclaw:dev-local';
 const ARTIFACT = Object.freeze({
@@ -59,33 +59,39 @@ function createSessionStorageAdapter(target) {
   };
 }
 
+export function resolveActivityBaseUrl(windowTarget = globalThis.window) {
+  return windowTarget?.__DLI_ACTIVITY_BASE_URL__ || PRODUCTION_ACTIVITY_BASE_URL;
+}
+
 export function createNemoClawActivity({
+  windowTarget = globalThis.window,
   fetchImpl = globalThis.fetch?.bind(globalThis),
   storageTarget = globalThis.sessionStorage,
   now,
   onDiagnostic = () => {},
+  initialize = options => DLIActivity.initialize(options),
 } = {}) {
-  const client = createActivityClient({
-    baseUrl: ACTIVITY_API_BASE_URL,
-    artifact: ARTIFACT,
+  const initializedActivity = Promise.resolve().then(() => initialize({
+    baseUrl: resolveActivityBaseUrl(windowTarget),
+    activity: ARTIFACT,
     storage: createSessionStorageAdapter(storageTarget),
     fetchImpl,
     now,
     onDiagnostic,
-  });
+  }));
 
-  async function attempt(operation) {
+  async function attempt(operation, failureValue = false) {
     try {
-      await operation();
-      return true;
+      const activity = await initializedActivity;
+      return await operation(activity);
     } catch (_) {
-      return false;
+      return failureValue;
     }
   }
 
   return {
     start() {
-      return attempt(() => client.ensureSession());
+      return attempt(() => true);
     },
     trackBuildReferral(destinationUrl) {
       return this.trackReferral(destinationUrl);
@@ -93,32 +99,33 @@ export function createNemoClawActivity({
     trackReferral(destinationUrl) {
       const referenceId = ACTIVITY_REFERRALS[destinationUrl];
       if (!referenceId) return Promise.resolve(false);
-      return attempt(() => client.recordReferral({
-        referenceId,
-        destinationUrl,
-        idempotencyKey: `nemoclaw:referral:${referenceId}`,
-      }));
+      return attempt(async activity => {
+        await activity.referral({
+          referenceId,
+          destinationUrl,
+          idempotencyKey: `nemoclaw:referral:${referenceId}`,
+        });
+        return true;
+      });
     },
     recordMilestone(milestoneRef) {
       const milestone = ACTIVITY_MILESTONES[milestoneRef];
       if (!milestone) return Promise.resolve(false);
-      return attempt(() => client.recordProgress({
-        progressPercent: milestone.progressPercent,
-        idempotencyKey: `nemoclaw:milestone:${milestoneRef}`,
-      }));
+      return attempt(async activity => {
+        await activity.progress(milestone.progressPercent, {
+          idempotencyKey: `nemoclaw:milestone:${milestoneRef}`,
+        });
+        return true;
+      });
     },
     getCourseActivityState() {
-      return client.getState();
+      return attempt(activity => activity.getState(), null);
     },
-    async recordCompletion() {
-      try {
-        const state = await client.getState();
-        if (Number(state?.progress_percent) < 100) return false;
-        await client.recordCompleted({ idempotencyKey: 'nemoclaw:course:completed' });
-        return true;
-      } catch (_) {
-        return false;
-      }
+    recordCompletion() {
+      return attempt(async activity => {
+        const result = await activity.complete({ idempotencyKey: 'nemoclaw:course:completed' });
+        return result?.written !== false;
+      });
     },
   };
 }
