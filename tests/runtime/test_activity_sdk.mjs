@@ -199,6 +199,14 @@ test('public state normalizes documented fields without authentication data', as
       },
       session_token: 'must-not-escape',
       authorization: { bearer_token: 'must-not-escape' },
+      nested_authentication: {
+        access_token: 'must-not-escape',
+        bearer_token: 'must-not-escape',
+        refresh_token: 'must-not-escape',
+        sessionToken: 'must-not-escape',
+        authorizationData: { value: 'must-not-escape' },
+        public_value: 'preserved',
+      },
     }),
   ];
   const activity = await DLIActivity.initialize({
@@ -218,9 +226,37 @@ test('public state normalizes documented fields without authentication data', as
       updateId: 'update-50',
       checkpointItems: [{ referenceId: 'module:02c' }],
     },
+    nestedAuthentication: {
+      publicValue: 'preserved',
+    },
   });
   assert.equal('sessionToken' in state, false);
   assert.equal('authorization' in state, false);
+});
+
+test('public state raises the monotonic progress floor learned from a read', async () => {
+  const calls = [];
+  const responses = [
+    jsonResponse(201, sessionResponse()),
+    jsonResponse(200, { progress_percent: 75, completed_at: null }),
+  ];
+  const activity = await DLIActivity.initialize({
+    baseUrl: 'https://activity-api.example.test',
+    activity: ACTIVITY,
+    storage: fakeStorage(),
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return responses.shift();
+    },
+    now: () => new Date('2026-08-19T20:00:00Z'),
+  });
+
+  await activity.getState();
+  assert.deepEqual(await activity.progress(70), {
+    written: false,
+    progressPercent: 75,
+  });
+  assert.equal(calls.length, 2);
 });
 
 test('public completion refreshes state and skips a premature write', async () => {
@@ -246,6 +282,33 @@ test('public completion refreshes state and skips a premature write', async () =
   });
   assert.equal(calls.length, 2);
   assert.equal(calls[1].init.method, 'GET');
+});
+
+test('public completion fails closed unless normalized progress is numeric integer 100', async () => {
+  for (const progressPercent of [undefined, '100', 99.5, 101]) {
+    const calls = [];
+    const state = { completed_at: null };
+    if (progressPercent !== undefined) state.progress_percent = progressPercent;
+    const responses = [
+      jsonResponse(201, sessionResponse()),
+      jsonResponse(200, state),
+    ];
+    const activity = await DLIActivity.initialize({
+      baseUrl: 'https://activity-api.example.test',
+      activity: ACTIVITY,
+      storage: fakeStorage(),
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return responses.shift();
+      },
+      now: () => new Date('2026-08-19T20:00:00Z'),
+    });
+
+    const result = await activity.complete();
+
+    assert.equal(result.written, false);
+    assert.equal(calls.length, 2, `must not write completion for ${String(progressPercent)}`);
+  }
 });
 
 test('public completion records an eligible completed update', async () => {

@@ -63,11 +63,10 @@ function normalizeDLIActivityBaseUrl(raw) {
   return url.href.replace(/\/+$/, '');
 }
 
-const AUTHENTICATION_STATE_KEYS = new Set([
-  'authorization',
-  'authorization_data',
-  'session_token',
-]);
+function isAuthenticationStateKey(key) {
+  const canonicalKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return canonicalKey.startsWith('authorization') || canonicalKey.endsWith('token');
+}
 
 function normalizeStateJson(value) {
   if (Array.isArray(value)) return value.map(normalizeStateJson);
@@ -75,7 +74,7 @@ function normalizeStateJson(value) {
     return value;
   }
   return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !AUTHENTICATION_STATE_KEYS.has(key))
+    .filter(([key]) => !isAuthenticationStateKey(key))
     .map(([key, entry]) => [
       key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()),
       normalizeStateJson(entry),
@@ -321,7 +320,9 @@ export class DLIActivity {
 
   async complete({ idempotencyKey } = {}) {
     const state = await this.getState();
-    if (state.progressPercent < 100) return { written: false, state };
+    if (!Number.isInteger(state.progressPercent) || state.progressPercent !== 100) {
+      return { written: false, state };
+    }
     return this.#client.recordCompleted({
       idempotencyKey: idempotencyKey || 'dli-activity:completed',
     });
