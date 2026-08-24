@@ -13,6 +13,35 @@ const ARTIFACT = Object.freeze({
   artifact_digest: `sha256:${'0'.repeat(64)}`,
 });
 
+export const ACTIVITY_MILESTONES = Object.freeze({
+  '01a:model-call-verified': Object.freeze({ progressPercent: 10 }),
+  '01b:react-loop-complete': Object.freeze({ progressPercent: 15 }),
+  '01c:tool-roundtrip-complete': Object.freeze({ progressPercent: 25 }),
+  '02a:routed-workflow-complete': Object.freeze({ progressPercent: 35 }),
+  '02b:grounded-answer-complete': Object.freeze({ progressPercent: 45 }),
+  '02c:deep-research-complete': Object.freeze({ progressPercent: 50 }),
+  '03a:nemoclaw-connected': Object.freeze({ progressPercent: 60 }),
+  '03b:workspace-inspected': Object.freeze({ progressPercent: 70 }),
+  '03c:scheduled-run-complete': Object.freeze({ progressPercent: 80 }),
+  '04a:policy-boundary-verified': Object.freeze({ progressPercent: 90 }),
+  '04b:live-agent-operated': Object.freeze({ progressPercent: 100 }),
+});
+
+export const ACTIVITY_REFERRALS = Object.freeze({
+  [BUILD_SIGNUP_URL]: 'build:nvidia-api-key',
+  'https://brev.nvidia.com/launchable/deploy/now?launchableID=env-3Azt0aYgVNFEuz7opyx3gscmowS&ncid=ref-dli-759990': 'brev:nemoclaw-launchable',
+  'https://build.nvidia.com/spark/nemoclaw-applications?ncid=ref-dli-146986': 'build:nemoclaw-applications',
+  'https://build.nvidia.com/nvidia/nemoclaw-for-openclaw/nemoclawcard?ncid=ref-dli-146986': 'build:nemoclaw-card',
+  'https://build.nvidia.com/blueprints?ncid=ref-dli-146986': 'build:ai-blueprints',
+  'https://build.nvidia.com/nvidia/aiq?ncid=ref-dli-146986': 'build:aiq-blueprint',
+  'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-build-an-ai-agent': 'developer:agentic-learning-path:build-agent',
+  'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-build-agentic-ai-rag': 'developer:agentic-learning-path:agentic-rag',
+  'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-evaluate-ai-agents': 'developer:agentic-learning-path:evaluate-agents',
+  'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-customize-ai-agents': 'developer:agentic-learning-path:customize-agents',
+  'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-build-deep-ai-agents': 'developer:agentic-learning-path:deep-agents',
+  'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-build-safer-autonomous-agent-using-openclaw': 'developer:agentic-learning-path:safer-openclaw',
+});
+
 function createSessionStorageAdapter(target) {
   return {
     load() {
@@ -59,18 +88,37 @@ export function createNemoClawActivity({
       return attempt(() => client.ensureSession());
     },
     trackBuildReferral(destinationUrl) {
-      if (destinationUrl !== BUILD_SIGNUP_URL) return Promise.resolve(false);
+      return this.trackReferral(destinationUrl);
+    },
+    trackReferral(destinationUrl) {
+      const referenceId = ACTIVITY_REFERRALS[destinationUrl];
+      if (!referenceId) return Promise.resolve(false);
       return attempt(() => client.recordReferral({
-        referenceId: 'build:nvidia-api-key',
-        destinationUrl: BUILD_SIGNUP_URL,
-        idempotencyKey: 'nemoclaw:01a:build-signup',
+        referenceId,
+        destinationUrl,
+        idempotencyKey: `nemoclaw:referral:${referenceId}`,
       }));
     },
-    recordApiKeyVerified() {
+    recordMilestone(milestoneRef) {
+      const milestone = ACTIVITY_MILESTONES[milestoneRef];
+      if (!milestone) return Promise.resolve(false);
       return attempt(() => client.recordProgress({
-        progressPercent: 10,
-        idempotencyKey: 'nemoclaw:01a:api-key-verified',
+        progressPercent: milestone.progressPercent,
+        idempotencyKey: `nemoclaw:milestone:${milestoneRef}`,
       }));
+    },
+    getCourseActivityState() {
+      return client.getState();
+    },
+    async recordCompletion() {
+      try {
+        const state = await client.getState();
+        if (Number(state?.progress_percent) < 100) return false;
+        await client.recordCompleted({ idempotencyKey: 'nemoclaw:course:completed' });
+        return true;
+      } catch (_) {
+        return false;
+      }
     },
   };
 }

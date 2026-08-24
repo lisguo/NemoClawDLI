@@ -432,21 +432,14 @@ helpers.log("rendered below. Edit the config and Run.");
 
 <script type="module">
 import { buildNav, updateKeyPill, mountKeyPanel, mountJourneyMap, mountCanvasFlow, mountRunCell } from "./scripts/_shared.js";
-import { BUILD_SIGNUP_URL, createNemoClawActivity } from "./scripts/_activity.js";
 document.getElementById("nav").innerHTML = buildNav("01a-loop.html");
 const pill = document.getElementById("key-status");
-const activity = createNemoClawActivity();
-void activity.start();
-document.addEventListener("click", event => {
-  const anchor = event.target.closest?.("a[href]");
-  if (anchor?.href === BUILD_SIGNUP_URL) void activity.trackBuildReferral(anchor.href);
-});
 updateKeyPill(pill);
 mountJourneyMap("#journey-map", "1a");
 mountKeyPanel(document.getElementById("key-panel"), {
   onSave: () => {
     updateKeyPill(pill);
-    void activity.recordApiKeyVerified();
+    window.dispatchEvent(new CustomEvent("nemoclaw:api-key-verified"));
   },
   onClear: () => updateKeyPill(pill),
 });

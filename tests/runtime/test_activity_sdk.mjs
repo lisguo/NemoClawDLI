@@ -144,6 +144,47 @@ test('a 200 write response is identified as an idempotent replay', async () => {
   );
 });
 
+test('completion is an authenticated idempotent completed update', async () => {
+  const calls = [];
+  const client = createActivityClient({
+    baseUrl: 'https://activity.example.test', artifact,
+    storage: createMemoryActivityStorage(sessionResponse()),
+    now: () => new Date('2026-08-19T20:00:00Z'),
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse(201, { update_id: 'completed-1', state: { progress_percent: 100 } });
+    },
+  });
+
+  await client.recordCompleted({ idempotencyKey: 'course-completed' });
+
+  assert.match(calls[0].url, /\/updates$/);
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['Idempotency-Key'], 'course-completed');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { type: 'completed', payload: {} });
+});
+
+test('state is read with bearer authentication and no request body', async () => {
+  const calls = [];
+  const client = createActivityClient({
+    baseUrl: 'https://activity.example.test', artifact,
+    storage: createMemoryActivityStorage(sessionResponse()),
+    now: () => new Date('2026-08-19T20:00:00Z'),
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse(200, { progress_percent: 100, completed_at: null });
+    },
+  });
+
+  const state = await client.getState();
+
+  assert.deepEqual(state, { progress_percent: 100, completed_at: null });
+  assert.match(calls[0].url, /\/state$/);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.body, undefined);
+  assert.equal(calls[0].init.headers.Authorization, `Bearer ${sessionResponse().session_token}`);
+});
+
 test('errors and diagnostics never expose bearer material', async () => {
   const diagnostics = [];
   const token = sessionResponse().session_token;

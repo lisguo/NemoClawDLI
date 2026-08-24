@@ -94,14 +94,17 @@ export function createActivityClient({
     try { onDiagnostic(event); } catch (_) {}
   }
 
-  async function requestJson(operation, path, { body, session, idempotencyKey } = {}) {
-    const headers = { 'Content-Type': 'application/json' };
+  async function requestJson(operation, path, { body, session, idempotencyKey, method = 'POST' } = {}) {
+    const headers = {};
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (session) headers.Authorization = `Bearer ${session.session_token}`;
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
     let response;
     try {
       response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
-        method: 'POST', headers, body: JSON.stringify(body), keepalive: operation === 'referral',
+        method, headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        keepalive: operation === 'referral',
       });
     } catch (_) {
       diagnostic(operation, 'network');
@@ -178,6 +181,20 @@ export function createActivityClient({
       return authenticatedWrite('progress', 'updates', {
         type: 'progress', payload: { progress_percent: progressPercent },
       }, idempotencyKey);
+    },
+    recordCompleted({ idempotencyKey }) {
+      return authenticatedWrite('completion', 'updates', {
+        type: 'completed', payload: {},
+      }, idempotencyKey);
+    },
+    async getState() {
+      const session = await ensureSession();
+      const { result } = await requestJson(
+        'state',
+        `/v1/activity-sessions/${encodeURIComponent(session.session_id)}/state`,
+        { session, method: 'GET' },
+      );
+      return result;
     },
   };
 }
