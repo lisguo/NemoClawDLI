@@ -95,11 +95,12 @@ test('start initializes the NemoClaw proof-of-concept activity once', async () =
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'initialize');
   assert.equal(calls[0][1].baseUrl, 'https://activity-api.learn.nvidia.com');
-  assert.deepEqual(calls[0][1].activity, {
+  assert.deepEqual(calls[0][1].artifact, {
     artifact_id: 'artifact_nemoclaw_web',
     artifact_version: 'dev-local',
     artifact_digest: `sha256:${'0'.repeat(64)}`,
   });
+  assert.equal('activity' in calls[0][1], false);
   assert.equal(typeof calls[0][1].storage.load, 'function');
 });
 

@@ -1,23 +1,30 @@
 // Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const SESSION_ID_PATTERN = /^[0-9a-f-]{36}$/;
+const ACTIVITY_ID_PATTERN = /^act_[0-9a-f-]{36}$/;
+const initializationAttempts = new Map();
+const storageIdentities = new WeakMap();
+let nextStorageIdentity = 1;
 
 export class ActivitySdkError extends Error {
-  constructor(message, { operation, category, status } = {}) {
+  constructor(message, { code, operation, category, status } = {}) {
     super(message);
     this.name = 'ActivitySdkError';
     this.operation = operation;
     this.category = category || 'configuration';
+    if (code !== undefined) this.code = code;
     if (status !== undefined) this.status = status;
   }
 }
 
 export class DLIActivityError extends Error {
-  constructor(code, message, options) {
-    super(message, options);
+  constructor(code, message, { cause, operation, category, status } = {}) {
+    super(message, { cause });
     this.name = 'DLIActivityError';
     this.code = code;
+    if (operation !== undefined) this.operation = operation;
+    if (category !== undefined) this.category = category;
+    if (status !== undefined) this.status = status;
   }
 }
 
@@ -63,6 +70,38 @@ function normalizeDLIActivityBaseUrl(raw) {
   return url.href.replace(/\/+$/, '');
 }
 
+function translatePublicError(error) {
+  if (error instanceof DLIActivityError) return error;
+  if (!(error instanceof ActivitySdkError)) {
+    return new DLIActivityError('activity_error', 'Activity operation failed', { cause: error });
+  }
+  const code = error.code || (error.category === 'network'
+    ? 'network_error'
+    : error.category === 'idempotency-conflict'
+      ? 'idempotency_conflict'
+      : 'activity_error');
+  const messages = {
+    invalid_configuration: 'Activity configuration is invalid',
+    network_error: 'Activity request failed',
+    request_rejected: 'Activity request was rejected',
+    invalid_response: 'Activity response is invalid',
+    idempotency_conflict: 'Activity idempotency key conflicts with an earlier request',
+  };
+  return new DLIActivityError(code, messages[code] || 'Activity operation failed', {
+    cause: error,
+    operation: error.operation,
+    category: error.category,
+    status: error.status,
+  });
+}
+
+function storageIdentity(storage) {
+  if (storage === undefined) return 'default';
+  if ((typeof storage !== 'object' && typeof storage !== 'function') || storage === null) return 'invalid';
+  if (!storageIdentities.has(storage)) storageIdentities.set(storage, nextStorageIdentity++);
+  return storageIdentities.get(storage);
+}
+
 function isAuthenticationStateKey(key) {
   const canonicalKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
   return canonicalKey.startsWith('authorization') || canonicalKey.endsWith('token');
@@ -84,7 +123,9 @@ function normalizeStateJson(value) {
 function validateArtifact(artifact) {
   const digest = artifact?.artifact_digest;
   if (!artifact?.artifact_id || !artifact?.artifact_version || !/^sha256:[0-9a-f]{64}$/.test(digest || '')) {
-    throw new ActivitySdkError('Activity artifact identity is invalid');
+    throw new ActivitySdkError('Activity artifact identity is invalid', {
+      code: 'invalid_configuration', category: 'configuration',
+    });
   }
   return {
     artifact_id: artifact.artifact_id,
@@ -95,15 +136,15 @@ function validateArtifact(artifact) {
 
 function validateSession(value) {
   const expiresAt = Date.parse(value?.expires_at || '');
-  if (!SESSION_ID_PATTERN.test(value?.session_id || '') ||
+  if (!ACTIVITY_ID_PATTERN.test(value?.activity_id || '') ||
       typeof value?.session_token !== 'string' || value.session_token.length < 16 ||
       !Number.isFinite(expiresAt)) {
     throw new ActivitySdkError('Activity session response is invalid', {
-      operation: 'session', category: 'validation',
+      code: 'invalid_response', operation: 'session', category: 'validation',
     });
   }
   return {
-    session_id: value.session_id,
+    activity_id: value.activity_id,
     session_token: value.session_token,
     expires_at: value.expires_at,
   };
@@ -126,9 +167,13 @@ export function createActivityClient({
 } = {}) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   const normalizedArtifact = validateArtifact(artifact);
-  if (typeof fetchImpl !== 'function') throw new ActivitySdkError('Fetch API is unavailable');
+  if (typeof fetchImpl !== 'function') throw new ActivitySdkError('Fetch API is unavailable', {
+    code: 'invalid_configuration', category: 'configuration',
+  });
   if (!storage || typeof storage.load !== 'function' || typeof storage.save !== 'function') {
-    throw new ActivitySdkError('Activity storage adapter is invalid');
+    throw new ActivitySdkError('Activity storage adapter is invalid', {
+      code: 'invalid_configuration', category: 'configuration',
+    });
   }
 
   let initializing = null;
@@ -153,12 +198,15 @@ export function createActivityClient({
       });
     } catch (_) {
       diagnostic(operation, 'network');
-      throw new ActivitySdkError('Activity request failed', { operation, category: 'network' });
+      throw new ActivitySdkError('Activity request failed', {
+        code: 'network_error', operation, category: 'network',
+      });
     }
     if (!response.ok) {
       const category = categoryForStatus(response.status);
       diagnostic(operation, category, response.status);
       throw new ActivitySdkError('Activity request was rejected', {
+        code: category === 'idempotency-conflict' ? 'idempotency_conflict' : 'request_rejected',
         operation, category, status: response.status,
       });
     }
@@ -167,7 +215,7 @@ export function createActivityClient({
     catch (_) {
       diagnostic(operation, 'validation', response.status);
       throw new ActivitySdkError('Activity response is invalid', {
-        operation, category: 'validation', status: response.status,
+        code: 'invalid_response', operation, category: 'validation', status: response.status,
       });
     }
     return { result, replayed: response.status === 200 };
@@ -200,14 +248,16 @@ export function createActivityClient({
   function requireIdempotencyKey(value) {
     const key = String(value || '').trim();
     if (!key || key.length > 255) {
-      throw new ActivitySdkError('Activity idempotency key is invalid');
+      throw new ActivitySdkError('Activity idempotency key is invalid', {
+        code: 'invalid_configuration', category: 'configuration',
+      });
     }
     return key;
   }
 
   async function authenticatedWrite(operation, suffix, body, idempotencyKey) {
     const session = await ensureSession();
-    return requestJson(operation, `/v1/activity-sessions/${encodeURIComponent(session.session_id)}/${suffix}`, {
+    return requestJson(operation, `/v1/activities/${encodeURIComponent(session.activity_id)}/${suffix}`, {
       body,
       session,
       idempotencyKey: requireIdempotencyKey(idempotencyKey),
@@ -236,7 +286,7 @@ export function createActivityClient({
       const session = await ensureSession();
       const { result } = await requestJson(
         'state',
-        `/v1/activity-sessions/${encodeURIComponent(session.session_id)}/state`,
+        `/v1/activities/${encodeURIComponent(session.activity_id)}/state`,
         { session, method: 'GET' },
       );
       return result;
@@ -247,28 +297,47 @@ export function createActivityClient({
 export class DLIActivity {
   #client;
   #progressPercent = 0;
-  #sessionToken;
+  #progressHydrated = false;
+  #progressQueue = Promise.resolve();
 
   /**
    * Creates the lesson-facing activity facade. Storage, fetchImpl, now, and
    * onDiagnostic are integration and test adapters, not lesson-facing options.
    */
-  constructor({ baseUrl, activity, storage, fetchImpl, now, onDiagnostic } = {}) {
-    this.#client = createActivityClient({
-      baseUrl: normalizeDLIActivityBaseUrl(baseUrl),
-      artifact: activity,
-      storage,
-      fetchImpl,
-      now,
-      onDiagnostic,
-    });
+  constructor({ baseUrl, artifact, storage, fetchImpl, now, onDiagnostic, ...unsupported } = {}) {
+    try {
+      if (Object.keys(unsupported).length > 0) {
+        throw new ActivitySdkError('Activity configuration contains unsupported options', {
+          code: 'invalid_configuration', category: 'configuration',
+        });
+      }
+      this.#client = createActivityClient({
+        baseUrl: normalizeDLIActivityBaseUrl(baseUrl), artifact, storage, fetchImpl, now, onDiagnostic,
+      });
+    } catch (error) {
+      throw translatePublicError(error);
+    }
   }
 
   static async initialize(options) {
-    const instance = new DLIActivity(options);
-    const session = await instance.#client.ensureSession();
-    instance.#sessionToken = session.session_token;
-    return instance;
+    let instance;
+    let key;
+    try {
+      instance = new DLIActivity(options);
+      const normalizedArtifact = validateArtifact(options?.artifact);
+      key = JSON.stringify([
+        normalizeDLIActivityBaseUrl(options?.baseUrl), normalizedArtifact, storageIdentity(options?.storage),
+      ]);
+    } catch (error) {
+      throw translatePublicError(error);
+    }
+    if (initializationAttempts.has(key)) return initializationAttempts.get(key);
+    const attempt = instance.#client.ensureSession()
+      .then(() => instance)
+      .catch(error => { throw translatePublicError(error); })
+      .finally(() => initializationAttempts.delete(key));
+    initializationAttempts.set(key, attempt);
+    return attempt;
   }
 
   async progress(progressPercent, { idempotencyKey } = {}) {
@@ -278,19 +347,26 @@ export class DLIActivity {
         'Activity progress must be an integer from 0 through 100',
       );
     }
-    if (progressPercent < this.#progressPercent) {
-      return { written: false, progressPercent: this.#progressPercent };
-    }
-    const response = await this.#client.recordProgress({
-      progressPercent,
-      idempotencyKey: idempotencyKey || `dli-activity:progress:${progressPercent}`,
-    });
-    const recordedProgress = response.result?.state?.progress_percent;
-    this.#progressPercent = Math.max(
-      this.#progressPercent,
-      Number.isInteger(recordedProgress) ? recordedProgress : progressPercent,
-    );
-    return response;
+    const operation = async () => {
+      if (!this.#progressHydrated) await this.#getState();
+      if (progressPercent < this.#progressPercent) {
+        return { written: false, progressPercent: this.#progressPercent };
+      }
+      const response = await this.#client.recordProgress({
+        progressPercent,
+        idempotencyKey: idempotencyKey || `dli-activity:progress:${progressPercent}`,
+      });
+      const recordedProgress = response.result?.state?.progress_percent;
+      this.#progressPercent = Math.max(
+        this.#progressPercent,
+        Number.isInteger(recordedProgress) ? recordedProgress : progressPercent,
+      );
+      return response;
+    };
+    const result = this.#progressQueue.then(operation, operation);
+    this.#progressQueue = result.then(() => undefined, () => undefined);
+    try { return await result; }
+    catch (error) { throw translatePublicError(error); }
   }
 
   async referral({ referenceId, destinationUrl, idempotencyKey } = {}) {
@@ -303,19 +379,27 @@ export class DLIActivity {
     if (!normalizedReferenceId || !['https:', 'http:'].includes(destination.protocol)) {
       throw new DLIActivityError('invalid_referral', 'Activity referral is invalid');
     }
-    return this.#client.recordReferral({
-      referenceId: normalizedReferenceId,
-      destinationUrl: destination.href,
-      idempotencyKey: idempotencyKey || `dli-activity:referral:${normalizedReferenceId}`,
-    });
+    try {
+      return await this.#client.recordReferral({
+        referenceId: normalizedReferenceId,
+        destinationUrl: destination.href,
+        idempotencyKey: idempotencyKey || `dli-activity:referral:${normalizedReferenceId}`,
+      });
+    } catch (error) { throw translatePublicError(error); }
   }
 
-  async getState() {
+  async #getState() {
     const state = normalizeStateJson(await this.#client.getState());
+    this.#progressHydrated = true;
     if (Number.isInteger(state.progressPercent)) {
       this.#progressPercent = Math.max(this.#progressPercent, state.progressPercent);
     }
     return state;
+  }
+
+  async getState() {
+    try { return await this.#getState(); }
+    catch (error) { throw translatePublicError(error); }
   }
 
   async complete({ idempotencyKey } = {}) {
@@ -323,8 +407,10 @@ export class DLIActivity {
     if (!Number.isInteger(state.progressPercent) || state.progressPercent !== 100) {
       return { written: false, state };
     }
-    return this.#client.recordCompleted({
-      idempotencyKey: idempotencyKey || 'dli-activity:completed',
-    });
+    try {
+      return await this.#client.recordCompleted({
+        idempotencyKey: idempotencyKey || 'dli-activity:completed',
+      });
+    } catch (error) { throw translatePublicError(error); }
   }
 }

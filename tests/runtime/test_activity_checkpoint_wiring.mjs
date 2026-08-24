@@ -84,6 +84,7 @@ test('Going Further exposes an explicit gated Finish Course action', () => {
   assert.match(page, /recordCompletion/);
   assert.match(page, /Course completed/);
   assert.match(page, /state\.progressPercent/);
+  assert.match(page, /Number\.isInteger\(state\.progressPercent\)\s*&&\s*state\.progressPercent\s*===\s*100/);
   assert.match(page, /state\.completedAt/);
   assert.doesNotMatch(page, /state\.(?:progress_percent|completed_at)/);
 });

@@ -78,7 +78,7 @@ export function createNemoClawActivity({
 
     const attempt = Promise.resolve().then(() => initialize({
       baseUrl: resolveActivityBaseUrl(windowTarget),
-      activity: ARTIFACT,
+      artifact: ARTIFACT,
       storage: createSessionStorageAdapter(storageTarget),
       fetchImpl,
       now,

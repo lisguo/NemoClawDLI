@@ -33,31 +33,31 @@ function jsonResponse(status, body) {
 
 function sessionResponse(overrides = {}) {
   return {
-    session_id: '0198f100-0000-7000-8000-000000000001',
     session_token: 'opaque-session-token-with-safe-length',
+    activity_id: 'act_019f38f1-e5ab-7688-af0d-0e8925299e93',
     expires_at: '2026-08-19T21:00:00Z',
     ...overrides,
   };
 }
 
 test('public initialization creates one activity session', async () => {
-  let sessionCreateCalls = 0;
+  const sessionCreateBodies = [];
   const now = () => new Date('2026-08-19T20:00:00Z');
-  const fetchImpl = async () => {
-    sessionCreateCalls += 1;
+  const fetchImpl = async (_url, init) => {
+    sessionCreateBodies.push(JSON.parse(init.body));
     return jsonResponse(201, sessionResponse());
   };
 
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl,
     now,
   });
 
   assert.equal(activity instanceof DLIActivity, true);
-  assert.equal(sessionCreateCalls, 1);
+  assert.deepEqual(sessionCreateBodies, [ACTIVITY]);
 });
 
 test('public initialization rejects unsafe activity API base URLs', async () => {
@@ -70,21 +70,144 @@ test('public initialization rejects unsafe activity API base URLs', async () => 
 
   for (const baseUrl of unsafeBaseUrls) {
     await assert.rejects(
-      DLIActivity.initialize({ baseUrl, activity: ACTIVITY }),
+      DLIActivity.initialize({ baseUrl, artifact: ACTIVITY }),
       error => error instanceof DLIActivityError,
     );
   }
+});
+
+test('public initialization rejects the removed activity alias', async () => {
+  await assert.rejects(
+    DLIActivity.initialize({
+      baseUrl: 'https://activity-api.example.test',
+      activity: ACTIVITY,
+    }),
+    error => error instanceof DLIActivityError && error.code === 'invalid_configuration',
+  );
+});
+
+test('concurrent public initialization shares one facade and retries after rejection', async () => {
+  const storage = fakeStorage();
+  const attempts = [];
+  const options = {
+    baseUrl: 'https://activity-api.example.test/',
+    artifact: ACTIVITY,
+    storage,
+    now: () => new Date('2026-08-19T20:00:00Z'),
+    fetchImpl: () => new Promise((resolve, reject) => attempts.push({ resolve, reject })),
+  };
+
+  const first = DLIActivity.initialize(options);
+  const concurrent = DLIActivity.initialize({ ...options, baseUrl: 'https://activity-api.example.test' });
+  await Promise.resolve();
+  assert.equal(attempts.length, 1);
+  attempts[0].reject(new TypeError('opaque network failure'));
+  await assert.rejects(first, error => error instanceof DLIActivityError && error.code === 'network_error');
+  await assert.rejects(concurrent, error => error instanceof DLIActivityError && error.code === 'network_error');
+
+  const retry = DLIActivity.initialize(options);
+  await Promise.resolve();
+  assert.equal(attempts.length, 2);
+  attempts[1].resolve(jsonResponse(201, sessionResponse()));
+  assert.equal(await retry instanceof DLIActivity, true);
+});
+
+test('all low-level failures crossing public boundaries are translated with safe metadata', async () => {
+  await assert.rejects(
+    Promise.resolve().then(() => new DLIActivity({
+      baseUrl: 'https://activity-api.example.test',
+      artifact: { ...ACTIVITY, artifact_digest: 'invalid' },
+    })),
+    error => error instanceof DLIActivityError &&
+      error.code === 'invalid_configuration' &&
+      error.category === 'configuration' &&
+      error.cause instanceof ActivitySdkError,
+  );
+
+  for (const { status, code, category } of [
+    { status: 503, code: 'request_rejected', category: 'server' },
+    { status: 409, code: 'idempotency_conflict', category: 'idempotency-conflict' },
+  ]) {
+    const activity = await DLIActivity.initialize({
+      baseUrl: 'https://activity-api.example.test', artifact: ACTIVITY,
+      storage: createMemoryActivityStorage(sessionResponse()),
+      now: () => new Date('2026-08-19T20:00:00Z'),
+      fetchImpl: async () => jsonResponse(status, { detail: 'must-not-escape' }),
+    });
+    await assert.rejects(
+      activity.referral({ referenceId: 'safe-ref', destinationUrl: 'https://example.test/' }),
+      error => error instanceof DLIActivityError && error.code === code &&
+        error.operation === 'referral' && error.category === category && error.status === status &&
+        !JSON.stringify(error).includes('must-not-escape'),
+    );
+  }
+});
+
+test('network and invalid-response failures are translated by every async public operation', async () => {
+  const cases = [
+    ['progress', activity => activity.progress(50), 'network_error', async () => { throw new TypeError('secret'); }],
+    ['getState', activity => activity.getState(), 'invalid_response', async () => new Response('not-json', { status: 200 })],
+    ['complete', activity => activity.complete(), 'invalid_response', async () => new Response('not-json', { status: 200 })],
+  ];
+  for (const [name, invoke, code, fetchImpl] of cases) {
+    const activity = await DLIActivity.initialize({
+      baseUrl: 'https://activity-api.example.test', artifact: ACTIVITY,
+      storage: createMemoryActivityStorage(sessionResponse()),
+      now: () => new Date('2026-08-19T20:00:00Z'), fetchImpl,
+    });
+    await assert.rejects(invoke(activity), error => error instanceof DLIActivityError &&
+      error.code === code && error.cause instanceof ActivitySdkError,
+      `${name} must translate its low-level error`);
+  }
+});
+
+test('public progress hydrates restored server state before its first write', async () => {
+  const calls = [];
+  const activity = await DLIActivity.initialize({
+    baseUrl: 'https://activity-api.example.test', artifact: ACTIVITY,
+    storage: createMemoryActivityStorage(sessionResponse()),
+    now: () => new Date('2026-08-19T20:00:00Z'),
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse(200, { progress_percent: 75, completed_at: null });
+    },
+  });
+
+  assert.deepEqual(await activity.progress(50), { written: false, progressPercent: 75 });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/state$/);
+});
+
+test('concurrent public progress calls never write a decrease', async () => {
+  const writes = [];
+  const activity = await DLIActivity.initialize({
+    baseUrl: 'https://activity-api.example.test', artifact: ACTIVITY,
+    storage: createMemoryActivityStorage(sessionResponse()),
+    now: () => new Date('2026-08-19T20:00:00Z'),
+    fetchImpl: async (url, init) => {
+      if (url.endsWith('/state')) return jsonResponse(200, { progress_percent: 0, completed_at: null });
+      const percent = JSON.parse(init.body).payload.progress_percent;
+      writes.push(percent);
+      return jsonResponse(201, { update_id: `progress-${percent}`, state: { progress_percent: percent } });
+    },
+  });
+
+  const [higher, lower] = await Promise.all([activity.progress(50), activity.progress(40)]);
+  assert.equal(higher.result.state.progress_percent, 50);
+  assert.deepEqual(lower, { written: false, progressPercent: 50 });
+  assert.deepEqual(writes, [50]);
 });
 
 test('public progress records a monotonic integer percentage', async () => {
   const calls = [];
   const responses = [
     jsonResponse(201, sessionResponse()),
+    jsonResponse(200, { progress_percent: 0, completed_at: null }),
     jsonResponse(201, { update_id: 'progress-50', state: { progress_percent: 75 } }),
   ];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -96,9 +219,9 @@ test('public progress records a monotonic integer percentage', async () => {
   await activity.progress(50);
   await activity.progress(70);
 
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].init.headers['Idempotency-Key'], 'dli-activity:progress:50');
-  assert.deepEqual(JSON.parse(calls[1].init.body), {
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].init.headers['Idempotency-Key'], 'dli-activity:progress:50');
+  assert.deepEqual(JSON.parse(calls[2].init.body), {
     type: 'progress',
     payload: { progress_percent: 50 },
   });
@@ -108,26 +231,26 @@ test('public progress preserves a caller idempotency key', async () => {
   const calls = [];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
-      return calls.length === 1
-        ? jsonResponse(201, sessionResponse())
-        : jsonResponse(201, { update_id: 'progress-25', state: { progress_percent: 25 } });
+      if (calls.length === 1) return jsonResponse(201, sessionResponse());
+      if (calls.length === 2) return jsonResponse(200, { progress_percent: 0, completed_at: null });
+      return jsonResponse(201, { update_id: 'progress-25', state: { progress_percent: 25 } });
     },
     now: () => new Date('2026-08-19T20:00:00Z'),
   });
 
   await activity.progress(25, { idempotencyKey: 'course:checkpoint:25' });
 
-  assert.equal(calls[1].init.headers['Idempotency-Key'], 'course:checkpoint:25');
+  assert.equal(calls[2].init.headers['Idempotency-Key'], 'course:checkpoint:25');
 });
 
 test('public progress rejects invalid percentages before fetch', async () => {
   const activity = new DLIActivity({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async () => assert.fail('fetch must not run'),
   });
@@ -144,7 +267,7 @@ test('public referral records a portable destination', async () => {
   const calls = [];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -170,7 +293,7 @@ test('public referral records a portable destination', async () => {
 test('public referral rejects invalid input before fetch', async () => {
   const activity = new DLIActivity({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async () => assert.fail('fetch must not run'),
   });
@@ -211,7 +334,7 @@ test('public state normalizes documented fields without authentication data', as
   ];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async () => responses.shift(),
     now: () => new Date('2026-08-19T20:00:00Z'),
@@ -242,7 +365,7 @@ test('public state raises the monotonic progress floor learned from a read', asy
   ];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -267,7 +390,7 @@ test('public completion refreshes state and skips a premature write', async () =
   ];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -295,7 +418,7 @@ test('public completion fails closed unless normalized progress is numeric integ
     ];
     const activity = await DLIActivity.initialize({
       baseUrl: 'https://activity-api.example.test',
-      activity: ACTIVITY,
+      artifact: ACTIVITY,
       storage: fakeStorage(),
       fetchImpl: async (url, init) => {
         calls.push({ url, init });
@@ -320,7 +443,7 @@ test('public completion records an eligible completed update', async () => {
   ];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -345,7 +468,7 @@ test('public completion preserves a caller idempotency key', async () => {
   ];
   const activity = await DLIActivity.initialize({
     baseUrl: 'https://activity-api.example.test',
-    activity: ACTIVITY,
+    artifact: ACTIVITY,
     storage: fakeStorage(),
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
@@ -400,7 +523,7 @@ test('an unexpired stored session is reused without a request', async () => {
 test('an expired stored session is replaced', async () => {
   const storage = createMemoryActivityStorage(sessionResponse({ expires_at: '2026-08-19T19:00:00Z' }));
   let requests = 0;
-  const replacement = sessionResponse({ session_id: '0198f100-0000-7000-8000-000000000002' });
+  const replacement = sessionResponse({ activity_id: 'act_0198f100-0000-7000-8000-000000000002' });
   const client = createActivityClient({
     baseUrl: 'https://activity.example.test',
     artifact,
@@ -440,7 +563,7 @@ test('referral and progress writes use bearer and idempotency headers', async ()
   await client.recordProgress({ progressPercent: 10, idempotencyKey: 'progress-key' });
 
   assert.equal(calls.length, 2);
-  assert.match(calls[0].url, /\/v1\/activity-sessions\/0198f100-0000-7000-8000-000000000001\/referrals$/);
+  assert.match(calls[0].url, /\/v1\/activities\/act_019f38f1-e5ab-7688-af0d-0e8925299e93\/referrals$/);
   assert.match(calls[0].url, /\/referrals$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     reference_id: 'build:nvidia-api-key',

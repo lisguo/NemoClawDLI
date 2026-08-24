@@ -586,7 +586,7 @@ async function refreshCompletion() {
       finishStatus.textContent = "Course completed. You can return to the course home or continue exploring the resources above.";
       return;
     }
-    const ready = Number(state.progressPercent) >= 100;
+    const ready = Number.isInteger(state.progressPercent) && state.progressPercent === 100;
     finishButton.disabled = !ready;
     finishStatus.textContent = ready
       ? "All verified checkpoints are complete. Finish the course when you are ready."
