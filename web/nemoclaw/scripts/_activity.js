@@ -71,18 +71,29 @@ export function createNemoClawActivity({
   onDiagnostic = () => {},
   initialize = options => DLIActivity.initialize(options),
 } = {}) {
-  const initializedActivity = Promise.resolve().then(() => initialize({
-    baseUrl: resolveActivityBaseUrl(windowTarget),
-    activity: ARTIFACT,
-    storage: createSessionStorageAdapter(storageTarget),
-    fetchImpl,
-    now,
-    onDiagnostic,
-  }));
+  let initializedActivity;
+
+  function initializeActivity() {
+    if (initializedActivity) return initializedActivity;
+
+    const attempt = Promise.resolve().then(() => initialize({
+      baseUrl: resolveActivityBaseUrl(windowTarget),
+      activity: ARTIFACT,
+      storage: createSessionStorageAdapter(storageTarget),
+      fetchImpl,
+      now,
+      onDiagnostic,
+    }));
+    initializedActivity = attempt;
+    attempt.catch(() => {
+      if (initializedActivity === attempt) initializedActivity = undefined;
+    });
+    return attempt;
+  }
 
   async function attempt(operation, failureValue = false) {
     try {
-      const activity = await initializedActivity;
+      const activity = await initializeActivity();
       return await operation(activity);
     } catch (_) {
       return failureValue;

@@ -103,6 +103,33 @@ test('start initializes the NemoClaw proof-of-concept activity once', async () =
   assert.equal(typeof calls[0][1].storage.load, 'function');
 });
 
+test('failed initialization is retried while concurrent and successful attempts remain shared', async () => {
+  const attempts = [];
+  const activity = createNemoClawActivity({
+    initialize: () => new Promise((resolve, reject) => attempts.push({ resolve, reject })),
+  });
+
+  const firstStart = activity.start();
+  const concurrentStart = activity.start();
+  await Promise.resolve();
+  assert.equal(attempts.length, 1);
+
+  attempts[0].reject(new Error('temporarily unavailable'));
+  assert.equal(await firstStart, false);
+  assert.equal(await concurrentStart, false);
+
+  const retryStart = activity.start();
+  const concurrentRetry = activity.start();
+  await Promise.resolve();
+  assert.equal(attempts.length, 2);
+
+  attempts[1].resolve({});
+  assert.equal(await retryStart, true);
+  assert.equal(await concurrentRetry, true);
+  assert.equal(await activity.start(), true);
+  assert.equal(attempts.length, 2);
+});
+
 test('the approved NVIDIA Build destination records one referral', async () => {
   const { activity, calls } = createFixture();
 
