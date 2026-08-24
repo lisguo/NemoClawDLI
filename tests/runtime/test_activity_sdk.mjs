@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import {
   ActivitySdkError,
+  DLIActivity,
+  DLIActivityError,
   createActivityClient,
   createMemoryActivityStorage,
 } from '../../web/shared/activity-sdk.js';
@@ -15,6 +17,12 @@ const artifact = {
   artifact_version: 'dev-local',
   artifact_digest: `sha256:${'0'.repeat(64)}`,
 };
+
+const ACTIVITY = artifact;
+
+function fakeStorage() {
+  return createMemoryActivityStorage();
+}
 
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), {
@@ -31,6 +39,42 @@ function sessionResponse(overrides = {}) {
     ...overrides,
   };
 }
+
+test('public initialization creates one activity session', async () => {
+  let sessionCreateCalls = 0;
+  const now = () => new Date('2026-08-19T20:00:00Z');
+  const fetchImpl = async () => {
+    sessionCreateCalls += 1;
+    return jsonResponse(201, sessionResponse());
+  };
+
+  const activity = await DLIActivity.initialize({
+    baseUrl: 'https://activity-api.example.test',
+    activity: ACTIVITY,
+    storage: fakeStorage(),
+    fetchImpl,
+    now,
+  });
+
+  assert.equal(activity instanceof DLIActivity, true);
+  assert.equal(sessionCreateCalls, 1);
+});
+
+test('public initialization rejects unsafe activity API base URLs', async () => {
+  const unsafeBaseUrls = [
+    'https://user:secret@activity-api.example.test',
+    'https://activity-api.example.test?mode=test',
+    'https://activity-api.example.test#fragment',
+    'http://activity-api.example.test',
+  ];
+
+  for (const baseUrl of unsafeBaseUrls) {
+    await assert.rejects(
+      DLIActivity.initialize({ baseUrl, activity: ACTIVITY }),
+      error => error instanceof DLIActivityError,
+    );
+  }
+});
 
 test('concurrent initialization creates and stores one activity session', async () => {
   const calls = [];

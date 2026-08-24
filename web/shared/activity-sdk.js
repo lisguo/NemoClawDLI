@@ -13,6 +13,14 @@ export class ActivitySdkError extends Error {
   }
 }
 
+export class DLIActivityError extends Error {
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = 'DLIActivityError';
+    this.code = code;
+  }
+}
+
 export function createMemoryActivityStorage(initialValue = null) {
   let value = initialValue;
   return {
@@ -32,6 +40,25 @@ function normalizeBaseUrl(raw) {
   }
   if (url.username || url.password || url.search || url.hash) {
     throw new ActivitySdkError('Activity API base URL cannot contain credentials, query, or fragment');
+  }
+  return url.href.replace(/\/+$/, '');
+}
+
+function normalizeDLIActivityBaseUrl(raw) {
+  let url;
+  try { url = new URL(String(raw || '').trim()); }
+  catch (_) {
+    throw new DLIActivityError('invalid_base_url', 'Activity API base URL is invalid');
+  }
+  const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !loopback) {
+    throw new DLIActivityError('invalid_base_url', 'Activity API base URL must use HTTPS');
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new DLIActivityError(
+      'invalid_base_url',
+      'Activity API base URL cannot contain credentials, query, or fragment',
+    );
   }
   return url.href.replace(/\/+$/, '');
 }
@@ -197,4 +224,31 @@ export function createActivityClient({
       return result;
     },
   };
+}
+
+export class DLIActivity {
+  #client;
+  #sessionToken;
+
+  /**
+   * Creates the lesson-facing activity facade. Storage, fetchImpl, now, and
+   * onDiagnostic are integration and test adapters, not lesson-facing options.
+   */
+  constructor({ baseUrl, activity, storage, fetchImpl, now, onDiagnostic } = {}) {
+    this.#client = createActivityClient({
+      baseUrl: normalizeDLIActivityBaseUrl(baseUrl),
+      artifact: activity,
+      storage,
+      fetchImpl,
+      now,
+      onDiagnostic,
+    });
+  }
+
+  static async initialize(options) {
+    const instance = new DLIActivity(options);
+    const session = await instance.#client.ensureSession();
+    instance.#sessionToken = session.session_token;
+    return instance;
+  }
 }
