@@ -63,6 +63,25 @@ function normalizeDLIActivityBaseUrl(raw) {
   return url.href.replace(/\/+$/, '');
 }
 
+const AUTHENTICATION_STATE_KEYS = new Set([
+  'authorization',
+  'authorization_data',
+  'session_token',
+]);
+
+function normalizeStateJson(value) {
+  if (Array.isArray(value)) return value.map(normalizeStateJson);
+  if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
+    return value;
+  }
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !AUTHENTICATION_STATE_KEYS.has(key))
+    .map(([key, entry]) => [
+      key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()),
+      normalizeStateJson(entry),
+    ]));
+}
+
 function validateArtifact(artifact) {
   const digest = artifact?.artifact_digest;
   if (!artifact?.artifact_id || !artifact?.artifact_version || !/^sha256:[0-9a-f]{64}$/.test(digest || '')) {
@@ -228,6 +247,7 @@ export function createActivityClient({
 
 export class DLIActivity {
   #client;
+  #progressPercent = 0;
   #sessionToken;
 
   /**
@@ -250,5 +270,60 @@ export class DLIActivity {
     const session = await instance.#client.ensureSession();
     instance.#sessionToken = session.session_token;
     return instance;
+  }
+
+  async progress(progressPercent, { idempotencyKey } = {}) {
+    if (!Number.isInteger(progressPercent) || progressPercent < 0 || progressPercent > 100) {
+      throw new DLIActivityError(
+        'invalid_progress',
+        'Activity progress must be an integer from 0 through 100',
+      );
+    }
+    if (progressPercent < this.#progressPercent) {
+      return { written: false, progressPercent: this.#progressPercent };
+    }
+    const response = await this.#client.recordProgress({
+      progressPercent,
+      idempotencyKey: idempotencyKey || `dli-activity:progress:${progressPercent}`,
+    });
+    const recordedProgress = response.result?.state?.progress_percent;
+    this.#progressPercent = Math.max(
+      this.#progressPercent,
+      Number.isInteger(recordedProgress) ? recordedProgress : progressPercent,
+    );
+    return response;
+  }
+
+  async referral({ referenceId, destinationUrl, idempotencyKey } = {}) {
+    const normalizedReferenceId = String(referenceId || '').trim();
+    let destination;
+    try { destination = new URL(String(destinationUrl || '').trim()); }
+    catch (_) {
+      throw new DLIActivityError('invalid_referral', 'Activity referral destination URL is invalid');
+    }
+    if (!normalizedReferenceId || !['https:', 'http:'].includes(destination.protocol)) {
+      throw new DLIActivityError('invalid_referral', 'Activity referral is invalid');
+    }
+    return this.#client.recordReferral({
+      referenceId: normalizedReferenceId,
+      destinationUrl: destination.href,
+      idempotencyKey: idempotencyKey || `dli-activity:referral:${normalizedReferenceId}`,
+    });
+  }
+
+  async getState() {
+    const state = normalizeStateJson(await this.#client.getState());
+    if (Number.isInteger(state.progressPercent)) {
+      this.#progressPercent = Math.max(this.#progressPercent, state.progressPercent);
+    }
+    return state;
+  }
+
+  async complete({ idempotencyKey } = {}) {
+    const state = await this.getState();
+    if (state.progressPercent < 100) return { written: false, state };
+    return this.#client.recordCompleted({
+      idempotencyKey: idempotencyKey || 'dli-activity:completed',
+    });
   }
 }
