@@ -84,6 +84,21 @@ test('the referral registry includes product adoption and learning-path destinat
     ACTIVITY_REFERRALS['https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-build-safer-autonomous-agent-using-openclaw'],
     'developer:agentic-learning-path:safer-openclaw',
   );
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(ACTIVITY_REFERRALS).filter(([, referenceId]) =>
+      referenceId.startsWith('nvidia:'))),
+    {
+      'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path': 'nvidia:agentic-ai-learning-path',
+      'https://www.nvidia.com/en-us/ai/nemoclaw/': 'nvidia:nemoclaw',
+      'https://docs.nvidia.com/nemoclaw/latest/get-started/prerequisites': 'nvidia:nemoclaw-prerequisites',
+      'https://docs.nvidia.com/nim/': 'nvidia:nim',
+      'https://developer.nvidia.com/nemo-retriever': 'nvidia:nemo-retriever',
+      'https://github.com/NVIDIA/NemoClaw': 'nvidia:github:nemoclaw',
+      'https://github.com/NVIDIA/OpenShell': 'nvidia:github:openshell',
+      'https://github.com/NVIDIA/NeMo-Guardrails': 'nvidia:github:nemo-guardrails',
+      'https://github.com/NVIDIA/NeMo-Curator': 'nvidia:github:nemo-curator',
+    },
+  );
 });
 
 test('start initializes the NemoClaw proof-of-concept activity once', async () => {
