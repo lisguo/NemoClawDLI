@@ -40,6 +40,15 @@ export const ACTIVITY_REFERRALS = Object.freeze({
   'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-customize-ai-agents': 'developer:agentic-learning-path:customize-agents',
   'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-build-deep-ai-agents': 'developer:agentic-learning-path:deep-agents',
   'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path/how-to-build-safer-autonomous-agent-using-openclaw': 'developer:agentic-learning-path:safer-openclaw',
+  'https://developer.nvidia.com/topics/ai/agentic-ai-learning-path': 'nvidia:agentic-ai-learning-path',
+  'https://www.nvidia.com/en-us/ai/nemoclaw/': 'nvidia:nemoclaw',
+  'https://docs.nvidia.com/nemoclaw/latest/get-started/prerequisites': 'nvidia:nemoclaw-prerequisites',
+  'https://docs.nvidia.com/nim/': 'nvidia:nim',
+  'https://developer.nvidia.com/nemo-retriever': 'nvidia:nemo-retriever',
+  'https://github.com/NVIDIA/NemoClaw': 'nvidia:github:nemoclaw',
+  'https://github.com/NVIDIA/OpenShell': 'nvidia:github:openshell',
+  'https://github.com/NVIDIA/NeMo-Guardrails': 'nvidia:github:nemo-guardrails',
+  'https://github.com/NVIDIA/NeMo-Curator': 'nvidia:github:nemo-curator',
 });
 
 function createSessionStorageAdapter(target) {
