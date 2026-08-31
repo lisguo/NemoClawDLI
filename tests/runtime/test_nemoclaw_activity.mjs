@@ -101,6 +101,22 @@ test('the referral registry includes product adoption and learning-path destinat
   );
 });
 
+test('the public activity catalog covers every progress and referral record', () => {
+  const catalog = fs.readFileSync('docs/activity_tracking.md', 'utf8');
+
+  assert.match(catalog, /## Lifecycle records/);
+  assert.match(catalog, /## Progress records/);
+  assert.match(catalog, /## Referral records/);
+  for (const [milestoneRef, { progressPercent }] of Object.entries(ACTIVITY_MILESTONES)) {
+    assert.ok(catalog.includes(`| \`${milestoneRef}\` |`), `missing milestone: ${milestoneRef}`);
+    assert.ok(catalog.includes(`| ${progressPercent}% |`), `missing progress: ${progressPercent}%`);
+  }
+  for (const [destinationUrl, referenceId] of Object.entries(ACTIVITY_REFERRALS)) {
+    assert.ok(catalog.includes(`\`${referenceId}\``), `missing referral ID: ${referenceId}`);
+    assert.ok(catalog.includes(destinationUrl), `missing referral destination: ${destinationUrl}`);
+  }
+});
+
 test('start initializes the NemoClaw proof-of-concept activity once', async () => {
   const { activity, calls } = createFixture();
 
