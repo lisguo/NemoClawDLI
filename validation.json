@@ -1,0 +1,122 @@
+{
+  "courseCommit": "0adfc75ec959889126efac7cf8077752c0249359",
+  "artifact": {
+    "artifact_id": "artifact_nemoclaw_web",
+    "artifact_version": "git-0adfc75ec959889126efac7cf8077752c0249359",
+    "artifact_digest": "sha256:f177874fd1c643fd37f53b99b9b9c4912c1078775c6defc380aef143cd617308"
+  },
+  "started": "2026-10-15T00:20:53.212Z",
+  "apiEndpoint": "https://activity-api.learn.nvidia.com",
+  "browserOrigin": "https://nvdli.github.io",
+  "scope": "Candidate static files served locally under the intended origin; native browser requests to production Activity API and real OneTrust. Model responses and external lab success events are simulated.",
+  "redaction": "Only selected request/response headers and typed bodies are retained. Session bearer values are redacted. Cookie values, model keys, prompts and model output are excluded.",
+  "cases": [
+    {
+      "id": 1,
+      "result": "PASS",
+      "name": "Cookie opt-in is shown",
+      "screenshot": "images/01-cookie-optin-shown.png",
+      "assertions": [
+        "Real OneTrust banner visible",
+        "Zero Activity API requests before a saved choice"
+      ]
+    },
+    {
+      "id": 2,
+      "result": "PASS",
+      "name": "Opt-in reveals milestones",
+      "screenshot": "images/02-optin-milestones-appear.png",
+      "assertions": [
+        "Accepted cookies through the banner",
+        "Session POST201 contains only three artifact fields",
+        "All11 milestones loaded from production state, none completed",
+        "Enable overlay hidden"
+      ]
+    },
+    {
+      "id": 3,
+      "result": "PASS",
+      "name": "Complete the first milestone",
+      "screenshot": "images/03-first-milestone-completed.png",
+      "assertions": [
+        "Authored Save & verify and Run controls executed",
+        "Model response simulated",
+        "Production milestone update and state confirmation",
+        "First milestone shows Saved; summary1/11"
+      ]
+    },
+    {
+      "id": 4,
+      "result": "PASS",
+      "name": "All milestones and course completed",
+      "screenshot": "images/04-course-completed.png",
+      "assertions": [
+        "All11 milestones Saved through production API",
+        "Other external exercise success events simulated from course JSON",
+        "Finish Course records completion",
+        "Reload preserves11/11 and Course completed"
+      ]
+    },
+    {
+      "id": 5,
+      "result": "PASS",
+      "name": "Declining cookies requires opt-in",
+      "screenshot": "images/05-not-opted-in-enable-button.png",
+      "assertions": [
+        "Cookies rejected in fresh context",
+        "Muted milestone preview is inert",
+        "Enable Milestone Tracking button and Performance Cookies explanation visible",
+        "Zero Activity API requests"
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "id": "01a:model-call-verified",
+      "status": "Saved"
+    },
+    {
+      "id": "01b:react-loop-complete",
+      "status": "Saved"
+    },
+    {
+      "id": "01c:tool-roundtrip-complete",
+      "status": "Saved"
+    },
+    {
+      "id": "02a:routed-workflow-complete",
+      "status": "Saved"
+    },
+    {
+      "id": "02b:grounded-answer-complete",
+      "status": "Saved"
+    },
+    {
+      "id": "02c:deep-research-complete",
+      "status": "Saved"
+    },
+    {
+      "id": "03a:nemoclaw-connected",
+      "status": "Saved"
+    },
+    {
+      "id": "03b:workspace-inspected",
+      "status": "Saved"
+    },
+    {
+      "id": "03c:scheduled-run-complete",
+      "status": "Saved"
+    },
+    {
+      "id": "04a:policy-boundary-verified",
+      "status": "Saved"
+    },
+    {
+      "id": "04b:live-agent-operated",
+      "status": "Saved"
+    }
+  ],
+  "sessionId": "01a13cee-f455-7740-90a6-b281c639c39f",
+  "result": "PASS",
+  "finished": "2026-10-15T00:21:16.123Z"
+}
